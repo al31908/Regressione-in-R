@@ -1,0 +1,191 @@
+library(lme4) 
+library(haven) 
+library(tidyverse) 
+library(lmerTest)
+require(sjPlot)
+library(glmmTMB)
+
+# Apro il dataset ---------------------------------------------------------
+data <- dati.env
+remove(dati.env)
+remove(SumHes,RiceFarms,ISTAT2020_red) 
+
+data <- data %>%
+  group_by(country) %>%
+  mutate(Anno = 1990 + row_number() - 1) %>%
+  ungroup()
+
+
+# Scelgo e trasformo le variabili scelte ----------------------------------
+
+boxplot(data$co2.pc)
+#notiamo che la distribuzione è abbastanza asimettrica 
+#e che alcune variabili quantitative sono espresse in ordini di grandezza molto diversi tra loro
+#quindi consideriamo un adattamento dei valori su scala logaritmica 
+
+SET1 <- data %>% select(c(co2.pc, country, pop, en.pc , gdp.pc, urb,ci, lagco2.pc))
+
+SET1$pop <- log(SET1$pop)
+SET1$en.pc <- log(SET1$en.pc)
+SET1$gdp.pc <- log(SET1$gdp.pc)
+SET1$urb <- log(SET1$urb)
+SET1$ci <- log(SET1$ci)
+SET1$co2.pc <- log(SET1$co2.pc)
+SET1$lagco2.pc <- log(SET1$lagco2.pc)
+
+boxplot(SET1$co2.pc)#la varibile CO2 risulta più simmetrica
+
+# Analizzo le dipendenze tra le variabili scelte, inizio con CO2 ---------------------------------
+
+cor(SET1 %>% select(co2.pc, pop)) #-0.134
+cor(SET1 %>% select(co2.pc, en.pc)) #0.8302, alta correlazione. quindi le attribuisco un ruolo non marginale
+cor(SET1 %>% select(co2.pc, gdp.pc)) #0.5876, alta correlazione
+cor(SET1 %>% select(co2.pc, urb))# 0.128
+cor(SET1 %>% select(co2.pc, ci))# - 0.502
+
+
+#passo ai regressori
+#cercando di individuare se esistono variabili correlate linearmente negativamente o positivamente 
+#per far si di non inserire variabili superflue nel modello 
+
+cor(SET1 %>% select(en.pc, pop)) #-0.27 , energia e pop sono abbastanza indipendenti tra di loro 
+cor(SET1 %>% select(en.pc, ci)) #-0.62
+cor(SET1 %>% select(en.pc, gdp.pc)) #0.75
+cor(SET1 %>% select(ci, pop)) #0.42
+cor(SET1 %>% select(en.pc, lagco2.pc)) #0.87
+cor(SET1 %>% select(pop, lagco2.pc)) #-0.139 pop e lagco2 abbastanza indipendenti
+cor(SET1 %>% select(urb, gdp.pc))
+
+cor(SET1 %>% select(gdp.pc, lagco2.pc, pop, en.pc))
+
+#Correlazione tra gdp.pc e lagco2.pc: è positiva e abbastanza forte, con un valore di circa 0.585.
+#Ciò suggerisce una correlazione positiva tra il Prodotto Interno Lordo pro capite (gdp.pc) e le emissioni di anidride carbonica per abitante (lagco2.pc).
+
+#Correlazione tra gdp.pc e pop:
+#è leggermente negativa, con un valore di circa -0.074. Questo indica una correlazione debole e negativa tra il Prodotto Interno Lordo pro capite e la popolazione.
+
+#Correlazione tra gdp.pc e en.pc:
+#è positiva e piuttosto forte, con un valore di circa 0.752. Ciò suggerisce una correlazione positiva tra il Prodotto Interno Lordo pro capite e il consumo di energia pro capite.
+
+
+
+# Modello di regressione per l' Energia -----------------------------------
+
+
+
+
+M_energia <- lmer(en.pc ~1 + pop + (1|country), data=SET1)
+summary(M_energia) #notiamo che c'è una relazione positiva tra la l' aumento di energia consumata e la popolazione, seppur debole
+
+M_energia1 <- lmer(en.pc ~1 + gdp.pc + urb +(1|country), data=SET1)
+summary(M_energia1) #si evince che c'è una crescita positiva dell'energia consumata al crescere dell' urbanizzazione e del gdp
+cor(SET1 %>% select(urb, gdp.pc)) #verifichiamo inoltre che i regressori scelti non sono fortemente correlati tra di loro: 0.0998
+
+
+# Correlazioni tra la variabile co2 e i regressori scelti -----------------
+intercetta <-lmer(co2.pc ~1 + (1|country), data=data)
+summary(intercetta)
+
+M <- lmer(co2.pc ~1 + pop + (1|country), data=SET1)
+summary(M)
+M1 <-lmer(co2.pc ~1 + pop + en.pc + (1|country), data=SET1)
+summary(M1)
+M2 <- lmer(co2.pc ~1 + pop + en.pc + gdp.pc + (1|country), data=SET1)
+summary(M2)
+
+M4 <- lmer(co2.pc ~1  + en.pc + gdp.pc +  (1 + pop |country), data=SET1)
+summary(M4)
+ranova(M4)
+M5 <- lmer(co2.pc ~1  + en.pc + gdp.pc +  (1 + pop + en.pc |country), data=SET1)
+summary(M5)
+
+M7 <- lmer(co2.pc ~1  + en.pc + gdp.pc +  + pop  + (1 | country), data=SET1)
+summary(M7)
+M77 <-lmer(co2.pc ~1  + en.pc + gdp.pc +  pop  + ci +  (1 + ci| country), data=SET1)
+summary(M77)
+
+M98 <-lmer(co2.pc ~1  + en.pc  + pop + lagco2.pc + gdp.pc + (1 + pop + en.pc + lagco2.pc| country), data=SET1)
+ranova(M98)
+summary(M98)#anche se la variabili inserite risultano quasi tutte fortemente correlate, 
+#la varianza tra paesi risulta abbastanza alta (7.86)
+#vogliamo considerare i paesi come più omogenei possibile per trovare il tratto comune che influenza la co2 emessa
+
+
+
+M001 <- lmer(co2.pc ~1  + en.pc  + pop + gdp.pc + lagco2.pc + (1 + pop+ en.pc| country), data=SET1)
+ranova(M001)
+summary(M001)#la varianza degli effetti casuali di country arriva a 3.4321, mentre quella di pop a 0.107 quindi ne teniamo conto 
+
+
+#Calcolo R-square
+
+y_hat001 <- predict(M001, SET1) #Valori predetti dal modello
+y_bar001 <- mean(SET1$co2.pc) 
+R_squared001 <- 1 - sum((SET1$co2.pc - y_hat001)^2) / sum((SET1$co2.pc - y_bar001)^2) #0.994
+
+#considero anche i parametri AIC e BIC per valutare il modello in quanto l' R-squared cresce al crescere delle variabili dipendenti 
+#queste funzioni invece tengono conto dell'adattabilità del modello in relazione alla sua complessità
+AIC(M001) #-31862.751
+BIC(M001) #-3127.763
+#valori bassi tendenzialmente indicano un'affidabilità maggiore
+
+
+# Visualizzo la distribuzione dei residui del modello ---------------------
+RESIDUI001 <- residuals(M001)
+plot(M001) #la maggior parte si trova vicino allo zero
+
+qqnorm(RESIDUI001)
+qqline(RESIDUI001)
+
+#Distribuzione dei residui degli effetti casuali 
+
+qqnorm(ranef(M001)$country[,1])
+qqline(ranef(M001)$country[,1])
+
+
+
+# Previsione del modello rispetto ai dati reali ---------------------------
+
+
+
+plot_model(M001, type = "re", show.values = TRUE, title = "Random Effects Plot",
+           color = "skyblue", axis.title.x = "Country", axis.title.y = "Random Effects",
+           show.r2 = TRUE)
+
+# Grafico di dispersione tra dati osservati e previsti
+predicted_values = predict(M001)
+plot(SET1$co2.pc, predicted_values, pch = 20, col = "blue",
+     xlab = "Osservati (co2.pc)", ylab = "Previsti (co2.pc)",
+     main = "Confronto tra Dati Osservati e Previsti")
+
+# Aggiungi la linea di identità
+abline(0, 1, col = "red", lty = 2)
+
+# Aggiungi legenda
+legend("topright", legend = "Linea di Identità", col = "red", lty = 2)
+
+
+
+
+
+# Quantifico gli effetti casuali per Country ------------------------------
+
+
+re_effects = ranef(M001)$country
+barplot(re_effects$`(Intercept)`, beside=TRUE, main="Random Effects per Country")
+# Creo il grafico a barre e salvo le coordinate x delle barre
+bp <- barplot(re_effects$`(Intercept)`, beside=TRUE, main="Random Effects per Country", names.arg=rownames(re_effects), las=2)
+# Aggiungo etichette ai valori delle barre
+mapply(function(height, x) text(x, height, round(height, 2), pos=ifelse(height < 0, 3, 4)), 
+       re_effects$`(Intercept)`, bp)
+
+
+
+
+
+
+
+
+
+
+
